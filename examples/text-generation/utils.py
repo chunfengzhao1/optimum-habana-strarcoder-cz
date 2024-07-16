@@ -175,11 +175,13 @@ def patch_scoped_linear_all_reduce(model):
             setattr(model, name, SL)
         patch_scoped_linear_all_reduce(module)
 
-
 def get_torch_compiled_model(model):
-    model.model = torch.compile(model.model, backend="hpu_backend", options={"keep_input_mutations": True})
+    if  model.config.model_type in ['gpt_bigcode']:
+      # For gpt_bigcode model_type, model.transformer is used instead of model.model
+      model.transformer = torch.compile(model.transformer, backend="hpu_backend", options={"keep_input_mutations": True})
+    else:
+      model.model = torch.compile(model.model, backend="hpu_backend", options={"keep_input_mutations": True})
     return model
-
 
 def setup_model(args, model_dtype, model_kwargs, logger):
     logger.info("Single-device run.")
@@ -241,7 +243,7 @@ def setup_model(args, model_dtype, model_kwargs, logger):
             if model.peft_type == "ADAPTION_PROMPT":
                 model.base_model.model = wrap_in_hpu_graph(model.base_model.model)
 
-    if args.torch_compile and model.config.model_type == "llama":
+    if args.torch_compile:
         model = get_torch_compiled_model(model)
         # if args.assistant_model is not None:
         #     assistant_model = get_torch_compiled_model(assistant_model)
@@ -320,7 +322,7 @@ def setup_distributed_model(args, model_dtype, model_kwargs, logger):
         if args.assistant_model is not None:
             habana_quantization_toolkit.prep_model(assistant_model)
 
-    if args.torch_compile and model.config.model_type == "llama":
+    if args.torch_compile:
         model = get_torch_compiled_model(model)
         # if args.assistant_model is not None:
         #     assistant_model = get_torch_compiled_model(assistant_model)
