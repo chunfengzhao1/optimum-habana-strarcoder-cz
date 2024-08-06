@@ -294,6 +294,11 @@ def setup_parser(parser):
         default="none",
         help="Run multi card with the specified parallel strategy. Choices are 'tp' for Tensor Parallel Strategy or 'none'.",
     )
+    parser.add_argument(
+        "--llama_instruct",
+        action="store_true",
+        help="Enable instruction based default promt for llama.",
+    )
 
     args = parser.parse_args()
 
@@ -317,7 +322,7 @@ def main():
     model, assistant_model, tokenizer, generation_config = initialize_model(args, logger)
 
     use_lazy_mode = True
-    if args.torch_compile and model.config.model_type == "llama":
+    if args.torch_compile:
         use_lazy_mode = False
 
     import habana_frameworks.torch.hpu as torch_hpu
@@ -365,6 +370,25 @@ def main():
                 1342,  # Pride and Prejudice
             ]
             input_sentences = assemble_prompt(prompt_size=args.max_input_tokens, book_path=download_book(book_ids[0]))
+        elif args.llama_instruct:
+            messages = [
+                {"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"},
+                {"role": "user", "content": "Who are you?"},
+            ]
+
+            instruction = tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="pt",
+                tokenize=False
+            )
+
+            print(instruction)
+
+            input_sentences = [
+                instruction,
+                ]
+            print(input_sentences)
         else:
             input_sentences = [
                 "DeepSpeed is a machine learning framework",
@@ -388,6 +412,7 @@ def main():
         def generate(size=None, reduce_recompile=False):
             """Generates sequences from the input sentences and returns them."""
             encode_t0 = time.perf_counter()
+            t0 = time.perf_counter()
             # Tokenization
             if args.max_input_tokens > 0:
                 input_tokens = tokenizer.batch_encode_plus(
@@ -400,7 +425,6 @@ def main():
             else:
                 input_tokens = tokenizer.batch_encode_plus(input_sentences, return_tensors="pt", padding=True)
             encode_duration = time.perf_counter() - encode_t0
-
             if size is not None:
                 input_tokens = adjust_batch(input_tokens, size)
             if not reduce_recompile:
@@ -422,7 +446,9 @@ def main():
                 profiling_record_shapes=args.profiling_record_shapes,
             ).cpu()
             first_token_time = iteration_times[0] + encode_duration
+            duration = time.perf_counter() - t0
             logger.info(f"Time to first token = {first_token_time*1000}ms")
+            logger.info(f"Inter token time = {((duration - first_token_time)/(args.max_new_tokens - 1)) * 1000:.3f}ms")
             return tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
         from optimum.habana.utils import HabanaProfile
